@@ -1,0 +1,113 @@
+---
+# Run from /root/Project: ansible-playbook -i inventory monitor.yml
+- name: Configure monitoring_p (Prometheus + Grafana)
+  hosts: monitoring_p
+  become: true
+
+  tasks:
+    # ---------- Prometheus ----------
+    - name: Install Prometheus and apt helpers
+      ansible.builtin.apt:
+        name:
+          - prometheus
+          - apt-transport-https
+          - gnupg
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Tell Prometheus what to scrape (itself and web_p's Node Exporter)
+      ansible.builtin.copy:
+        dest: /etc/prometheus/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: prometheus
+              static_configs:
+                - targets: ["localhost:9090"]
+            - job_name: web_p
+              static_configs:
+                - targets: ["{{ hostvars['web_p']['ansible_host'] }}:9100"]
+      notify: Restart prometheus
+
+    # ---------- Grafana (not in Ubuntu's repos, so add Grafana's) ----------
+    - name: Create keyrings folder
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Grafana signing key
+      ansible.builtin.get_url:
+        url: https://apt.grafana.com/gpg.key
+        dest: /etc/apt/keyrings/grafana.asc
+        mode: "0644"
+
+    - name: Add Grafana apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+        filename: grafana
+        state: present
+
+    - name: Install Grafana
+      ansible.builtin.apt:
+        name: grafana
+        state: present
+        update_cache: true
+
+    - name: Connect Grafana to Prometheus automatically
+      ansible.builtin.copy:
+        dest: /etc/grafana/provisioning/datasources/prometheus.yml
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://localhost:9090
+              isDefault: true
+      notify: Restart grafana
+
+    # Allow the React site to embed Grafana, and let viewers see charts without logging in
+    - name: Create systemd override folder for Grafana
+      ansible.builtin.file:
+        path: /etc/systemd/system/grafana-server.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Set Grafana embedding and viewer access
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/grafana-server.service.d/override.conf
+        content: |
+          [Service]
+          Environment=GF_SECURITY_ALLOW_EMBEDDING=true
+          Environment=GF_AUTH_ANONYMOUS_ENABLED=true
+          Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      notify:
+        - Reload systemd
+        - Restart grafana
+
+    - name: Start and enable services
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop:
+        - prometheus
+        - grafana-server
+
+  handlers:
+    - name: Restart prometheus
+      ansible.builtin.service:
+        name: prometheus
+        state: restarted
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart grafana
+      ansible.builtin.service:
+        name: grafana-server
+        state: restarted

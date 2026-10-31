@@ -1,0 +1,14 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# SSH keys
+Key-pair/
+keypair.tf
+*.pem
+*.key
+
+# Variable files
+*.tfvars
+*.tfvars.json

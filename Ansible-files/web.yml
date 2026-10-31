@@ -1,0 +1,60 @@
+---
+# Run from the Control EC2: ansible-playbook -i inventory.ini web_p.yml
+- name: Configure web_p
+  hosts: web_p
+  become: true
+
+  vars:
+    backend_port: 3000   # FILL: port your Node.js backend will use (later)
+
+  tasks:
+    - name: Install packages
+      ansible.builtin.apt:
+        name:
+          - nginx
+          - nodejs                      # for the backend (later)
+          - npm
+          - postgresql-client           # to test the connection to db_p
+          - prometheus-node-exporter    # exposes CPU/memory/disk metrics on port 9100
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Copy React build (put your npm run build output in files/dist/)
+      ansible.builtin.copy:
+        src: files/dist/
+        dest: /var/www/html/
+        owner: www-data
+        group: www-data
+
+    - name: Configure Nginx (serve React, forward /api to backend)
+      ansible.builtin.copy:
+        dest: /etc/nginx/sites-available/default
+        content: |
+          server {
+              listen 80 default_server;
+              root /var/www/html;
+              index index.html;
+              location / {
+                  try_files $uri /index.html;
+              }
+              location /api/ {
+                  proxy_pass http://127.0.0.1:{{ backend_port }};
+              }
+          }
+      notify: Reload nginx
+
+    - name: Start and enable services
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop:
+        - nginx
+        - prometheus-node-exporter
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
