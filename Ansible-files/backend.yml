@@ -1,0 +1,56 @@
+---
+# Run from /root/Project: ansible-playbook -i inventory backend.yml
+- name: Deploy the metrics API on web_p
+  hosts: web_p
+  become: true
+
+  tasks:
+    - name: Create app folder
+      ansible.builtin.file:
+        path: /opt/cloudops
+        state: directory
+        mode: "0755"
+
+    - name: Copy API code
+      ansible.builtin.copy:
+        src: files/server.js
+        dest: /opt/cloudops/server.js
+        mode: "0644"
+      notify: Restart cloudops-api
+
+    - name: Create systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/cloudops-api.service
+        content: |
+          [Unit]
+          Description=CloudOps metrics API
+          After=network-online.target
+
+          [Service]
+          User=www-data
+          Environment=PROMETHEUS_URL=http://{{ hostvars['monitoring_p']['ansible_host'] }}:9090
+          Environment=PORT=3000
+          ExecStart=/usr/bin/node /opt/cloudops/server.js
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd
+        - Restart cloudops-api
+
+    - name: Start and enable the API
+      ansible.builtin.service:
+        name: cloudops-api
+        state: started
+        enabled: true
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart cloudops-api
+      ansible.builtin.service:
+        name: cloudops-api
+        state: restarted
